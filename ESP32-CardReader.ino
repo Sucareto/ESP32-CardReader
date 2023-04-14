@@ -3,16 +3,17 @@
 #define SerialDevice Serial
 #define LED_PIN 13
 #define PN532_SPI_SS 5
-// #define OTA_Enable
 
-#define SW1 33
-#define SW2 25
-#define SW3 26
-#define SW4 27
+
+#define SW1_MODE 33
+#define SW2_OTA 25
+#define SW3_LED 26
+#define SW4_FW 27
 bool ReaderMode, FWSW;
 
+#define OTA_Enable
 #ifdef OTA_Enable
-#pragma message "已启用OTA更新"
+#pragma message "已开启 OTA 更新功能"
 #define STASSID "ALL.Net Wi-Fi"
 #define STAPASS "SEGASEGASEGA"
 #define OTA_URL "http://esp-update.local/Sucareto/ESP32-Reader:2333/"
@@ -21,28 +22,28 @@ bool ReaderMode, FWSW;
 #endif
 
 #else
-#error "开发板选错了！！！"
+#error "未适配的开发板！！！"
 #endif
 
 #include "ReaderCmd.h"
 void (*ReaderMain)();
 
 void setup() {
-  pinMode(SW1, INPUT_PULLUP);  // Switch to Spice mode
-  pinMode(SW2, INPUT_PULLUP);  // Enable OTA
-  pinMode(SW3, INPUT_PULLUP);  // LED brightness
-  pinMode(SW4, INPUT_PULLUP);  // (Aime) Baudrate & fw/hw | (Spice) 1P 2P
+  pinMode(SW1_MODE, INPUT_PULLUP);  // Switch mode
+  pinMode(SW2_OTA, INPUT_PULLUP);   // Enable OTA
+  pinMode(SW3_LED, INPUT_PULLUP);   // LED brightness
+  pinMode(SW4_FW, INPUT_PULLUP);    // (Aime) Baudrate & fw/hw | (Spice) 1P 2P
 
   u8g2.begin();
   u8g2.setFont(u8g2_font_6x12_mf);
   FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, 8);
-  if (digitalRead(SW3)) {
+  if (digitalRead(SW3_LED)) {
     FastLED.setBrightness(20);
   }
   FastLED.showColor(0);
 
 #ifdef OTA_Enable
-  if (!digitalRead(SW1)) {  // OTA check
+  if (!digitalRead(SW2_OTA)) {
     WiFi.begin(STASSID, STAPASS);
     u8g2.drawStr(0, 28, "WiFi Connecting...");
     u8g2.sendBuffer();
@@ -80,12 +81,12 @@ void setup() {
   nfc.SAMConfig();
   u8g2.clearBuffer();
 
-  ReaderMode = !digitalRead(SW1);
-  FWSW = digitalRead(SW4);
+  ReaderMode = !digitalRead(SW1_MODE);
+  FWSW = !digitalRead(SW4_FW);
   if (ReaderMode) {  // BEMANI mode
     SerialDevice.begin(115200);
     u8g2.drawStr(0, 14, "SpiceTools");
-    u8g2.drawStr(117, 64, FWSW ? "1P" : "2P");
+    u8g2.drawStr(117, 64, FWSW ? "2P" : "1P");
     FastLED.showColor(CRGB::Yellow);
     ReaderMain = SpiceToolsReader;
   } else {  // Aime mode
@@ -128,11 +129,11 @@ void SpiceToolsReader() {  // Spice mode
   u8g2.sendBuffer();
   spiceapi::InfoAvs avs_info{};
   if (spiceapi::info_avs(CON, avs_info)) {
-    FWSW = digitalRead(SW4);
-    spiceapi::card_insert(CON, !FWSW, card_id);
+    FWSW = !digitalRead(SW4_FW);
+    spiceapi::card_insert(CON, FWSW, card_id);
     u8g2.drawStr(0, 30, card_id);
     u8g2.drawStr(0, 64, (avs_info.model + ":" + avs_info.dest + avs_info.spec + avs_info.rev + ":" + avs_info.ext).c_str());
-    u8g2.drawStr(117, 64, FWSW ? "1P" : "2P");
+    u8g2.drawStr(117, 64, FWSW ? "2P" : "1P");
     u8g2.sendBuffer();
     for (int i = 0; i < 8; i++) {
       leds[i] = CRGB::Red;
