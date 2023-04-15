@@ -11,11 +11,11 @@
 #define SW4_FW 27
 bool ReaderMode, FWSW;
 
-#define OTA_Enable
+// #define OTA_Enable
 #ifdef OTA_Enable
 #pragma message "已开启 OTA 更新功能"
-#define STASSID "ALL.Net Wi-Fi"
-#define STAPASS "SEGASEGASEGA"
+#define STASSID "SSIDNAME"
+#define STAPASS "PASSWORD"
 #define OTA_URL "http://esp-update.local/Sucareto/ESP32-Reader:2333/"
 #include <WiFi.h>
 #include <HTTPUpdate.h>
@@ -27,6 +27,9 @@ bool ReaderMode, FWSW;
 
 #include "ReaderCmd.h"
 void (*ReaderMain)();
+unsigned long ConnectTime = 0;
+bool ConnectStatus = false;
+uint16_t SleepDelay = 10000;  // ms
 
 void setup() {
   pinMode(SW1_MODE, INPUT_PULLUP);  // Switch mode
@@ -100,11 +103,24 @@ void setup() {
   memset(&req, 0, sizeof(req.bytes));
   memset(&res, 0, sizeof(res.bytes));
   u8g2.sendBuffer();
+  ConnectTime = millis();
+  ConnectStatus = true;
 }
 
 
 void loop() {
   ReaderMain();
+  if (ConnectStatus) {
+    if ((millis() - ConnectTime) > SleepDelay) {
+      u8g2.sleepOn();
+      ConnectStatus = false;
+    }
+  } else {
+    if ((millis() - ConnectTime) < SleepDelay) {
+      u8g2.sleepOff();
+      ConnectStatus = true;
+    }
+  }
 }
 
 
@@ -147,6 +163,7 @@ void SpiceToolsReader() {  // Spice mode
   u8g2.drawXBM(113, 0, 16, 16, blank);
   u8g2.drawStr(0, 30, "                ");
   u8g2.sendBuffer();
+  ConnectTime = millis();
 }
 
 
@@ -205,5 +222,6 @@ void AimeCardReader() {  // Aime mode
     default:
       sg_res_init();
   }
+  ConnectTime = millis();
   packet_write();
 }
