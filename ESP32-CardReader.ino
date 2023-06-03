@@ -7,7 +7,7 @@
 
 #define SW1_MODE 33
 #define SW2_OTA 25
-#define SW3_LED 26
+#define SW3_CARD 26
 #define SW4_FW 27
 bool ReaderMode, FWSW;
 
@@ -34,15 +34,13 @@ uint16_t SleepDelay = 10000;  // ms
 void setup() {
   pinMode(SW1_MODE, INPUT_PULLUP);  // Switch mode
   pinMode(SW2_OTA, INPUT_PULLUP);   // Enable OTA
-  pinMode(SW3_LED, INPUT_PULLUP);   // LED brightness
+  pinMode(SW3_CARD, INPUT_PULLUP);  // Hardcode mifare
   pinMode(SW4_FW, INPUT_PULLUP);    // (Aime) Baudrate & fw/hw | (Spice) 1P 2P
 
   u8g2.begin();
   u8g2.setFont(u8g2_font_6x12_mf);
   FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, 8);
-  if (digitalRead(SW3_LED)) {
-    FastLED.setBrightness(20);
-  }
+  FastLED.setBrightness(20);  // LED brightness
   FastLED.showColor(0);
 
 #ifdef OTA_Enable

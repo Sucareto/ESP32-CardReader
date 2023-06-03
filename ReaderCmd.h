@@ -14,6 +14,13 @@ U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0);
 #include "src/wrappers.h"
 spiceapi::Connection CON(512);
 
+static uint8_t mifare_data[][16] = {
+  // https://github.com/Sucareto/Arduino-Aime-Reader/blob/main/doc/aime%E7%A4%BA%E4%BE%8B.mct
+  { 0x8A, 0x1B, 0x72, 0xE1, 0x02, 0x08, 0x04, 0x00, 0x02, 0xFE, 0x9F, 0xC6, 0xDD, 0x8A, 0x3D, 0x1D },  // 前 4 位是 UID
+  {},                                                                                                  // 空数据占位符
+  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x11, 0x45, 0x14, 0x19, 0x19, 0x81, 0x02, 0x33, 0x33 },  // access code
+  { 0x57, 0x43, 0x43, 0x46, 0x76, 0x32, 0x08, 0x77, 0x8F, 0x11, 0x57, 0x43, 0x43, 0x46, 0x76, 0x32 },
+};
 
 // static unsigned char usb_disconnect[] = {
 //   0x00, 0x40, 0x00, 0xAE, 0x00, 0x51, 0x80, 0x20, 0x00, 0x41, 0x80, 0x42, 0x40, 0x44, 0x08, 0x28,
@@ -314,6 +321,16 @@ static void sg_nfc_cmd_radio_off() {
 }
 
 static void sg_nfc_cmd_poll() {  //卡号发送
+  if (!digitalRead(SW3_CARD)) {
+    memcpy(res.mifare_uid, mifare_data[0], 0x04);
+    res.id_len = 0x04;
+    sg_res_init(0x07);
+    res.count = 1;
+    res.type = 0x10;
+    u8g2.drawXBM(113, 0, 16, 16, card);
+    u8g2.sendBuffer();
+    return;
+  }
   uint16_t SystemCode;
   if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, res.mifare_uid, &res.id_len)) {
     sg_res_init(0x07);
@@ -337,6 +354,13 @@ static void sg_nfc_cmd_poll() {  //卡号发送
 
 static void sg_nfc_cmd_aime_authenticate() {
   sg_res_init();
+  if (!digitalRead(SW3_CARD)) {
+    uint8_t key_block_no = (req.block_no / 4) * 4 + 3;
+    if (memcmp(AimeKey, mifare_data[key_block_no], 6)) {
+      res.status = 1;
+    }
+    return;
+  }
   if (nfc.mifareclassic_AuthenticateBlock(req.uid, 4, req.block_no, 1, AimeKey)) {
     return;
   } else {
@@ -346,6 +370,13 @@ static void sg_nfc_cmd_aime_authenticate() {
 
 static void sg_nfc_cmd_bana_authenticate() {
   sg_res_init();
+  if (!digitalRead(SW3_CARD)) {
+    uint8_t key_block_no = (req.block_no / 4) * 4 + 3;
+    if (memcmp(BanaKey, mifare_data[key_block_no], 6)) {
+      res.status = 1;
+    }
+    return;
+  }
   if (nfc.mifareclassic_AuthenticateBlock(req.uid, 4, req.block_no, 0, BanaKey)) {
     return;
   } else {
@@ -354,6 +385,11 @@ static void sg_nfc_cmd_bana_authenticate() {
 }
 
 static void sg_nfc_cmd_mifare_read_block() {  //读取卡扇区数据
+  if (!digitalRead(SW3_CARD)) {
+    memcpy(res.block, mifare_data[req.block_no], 16);
+    sg_res_init(0x10);
+    return;
+  }
   if (nfc.mifareclassic_ReadDataBlock(req.block_no, res.block)) {
     sg_res_init(0x10);
     return;
