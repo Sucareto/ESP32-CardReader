@@ -356,7 +356,7 @@ static void sg_nfc_cmd_aime_authenticate() {
   sg_res_init();
   if (!digitalRead(SW3_CARD)) {
     uint8_t key_block_no = (req.block_no / 4) * 4 + 3;
-    if (memcmp(AimeKey, mifare_data[key_block_no], 6)) {
+    if (memcmp(AimeKey, mifare_data[key_block_no] + 10, 6)) {  // Key B
       res.status = 1;
     }
     return;
