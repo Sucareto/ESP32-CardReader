@@ -1,11 +1,54 @@
-#include "src/PN532_SPI.h"
-PN532_SPI pn532(SPI, PN532_SPI_SS);
+#ifdef ESP32
+#pragma message "当前的开发板是 ESP32"
+#define SerialDevice Serial
+#define LED_PIN 13
+#define PN532_SPI_SS 5
 
-#include "src/PN532.h"
-PN532 nfc(pn532);
+#define SW1_MODE 33
+#define SW2_OTA 25
+#define SW3_CARD 26
+#define SW4_FW 27
+
+// #define OTA_Enable
+#ifdef OTA_Enable
+#pragma message "已开启 OTA 更新功能"
+#define STASSID "SSIDNAME"
+#define STAPASS "PASSWORD"
+#define OTA_URL "http://esp-update.local/Sucareto/ESP32-Reader:2333/"
+#include <WiFi.h>
+#include <HTTPUpdate.h>
+#endif
+
+#else
+#error "未适配的开发板！！！"
+#endif
+
+#define old_fw_version "TN32MSEC003S F/W Ver1.2"
+#define old_hw_version "TN32MSEC003S H/W Ver3.0"
+#define old_led_info "15084\xFF\x10\x00\x12"
+
+#define new_fw_version "\x94"
+#define new_hw_version "837-15396"
+#define new_led_info "000-00000\xFF\x11\x40"
+
+bool ReaderMode, FWSW;
+uint8_t len, r, checksum;
+bool escape = false;
+unsigned long ConnectTime = 0;
+bool ConnectStatus = false;
+uint16_t SleepDelay = 10000;  // ms
 
 #include "FastLED.h"
 CRGB leds[8];
+
+#include <SPI.h>
+#include <PN532_SPI.h>
+PN532_SPI pn532(SPI, PN532_SPI_SS);
+
+#include "PN532.h"
+PN532 nfc(pn532);
+uint8_t KeyA[6], KeyB[6];
+uint8_t DefaultKey[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 
 #include <U8g2lib.h>
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0);
@@ -22,14 +65,6 @@ static uint8_t mifare_data[][16] = {
   { 0x57, 0x43, 0x43, 0x46, 0x76, 0x32, 0x08, 0x77, 0x8F, 0x11, 0x57, 0x43, 0x43, 0x46, 0x76, 0x32 },
 };
 
-// static unsigned char usb_disconnect[] = {
-//   0x00, 0x40, 0x00, 0xAE, 0x00, 0x51, 0x80, 0x20, 0x00, 0x41, 0x80, 0x42, 0x40, 0x44, 0x08, 0x28,
-//   0x14, 0x14, 0x22, 0x02, 0x42, 0x00, 0x82, 0x00, 0x04, 0x01, 0x8A, 0x00, 0x75, 0x00, 0x02, 0x00
-// };
-// static unsigned char usb_connect[] = {
-//   0x00, 0x40, 0x00, 0xA0, 0x00, 0x51, 0x80, 0x2A, 0x60, 0x14, 0x50, 0x08, 0xB0, 0x10, 0x48, 0x21,
-//   0x84, 0x12, 0x08, 0x0D, 0x10, 0x0A, 0x28, 0x06, 0x54, 0x01, 0x8A, 0x00, 0x05, 0x00, 0x02, 0x00
-// };
 static unsigned char rf_open[] = {
   0x00, 0x00, 0x00, 0x00, 0x04, 0x20, 0x02, 0x40, 0x02, 0x40, 0x11, 0x88, 0x91, 0x89, 0x49, 0x92,
   0x49, 0x92, 0x91, 0x89, 0x11, 0x88, 0x02, 0x40, 0x02, 0x40, 0x04, 0x20, 0x00, 0x00, 0x00, 0x00
@@ -39,6 +74,7 @@ static unsigned char rf_off[] = {
   0x01, 0x00, 0x02, 0x00, 0x04, 0x20, 0x0A, 0x40, 0x12, 0x40, 0x21, 0x88, 0x51, 0x89, 0x89, 0x92,
   0x49, 0x93, 0x91, 0x8A, 0x11, 0x8C, 0x02, 0x48, 0x02, 0x50, 0x04, 0x20, 0x00, 0x40, 0x00, 0x80
 };
+
 static unsigned char card[] = {
   0x00, 0x00, 0xFC, 0x3F, 0x02, 0x40, 0x32, 0x48, 0x52, 0x48, 0x92, 0x48, 0x12, 0x49, 0x12, 0x4A,
   0x52, 0x48, 0x92, 0x48, 0x12, 0x49, 0x12, 0x4A, 0x12, 0x4C, 0x02, 0x40, 0xFC, 0x3F, 0x00, 0x00
@@ -49,47 +85,58 @@ static unsigned char blank[] = {
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-uint8_t AimeKey[6], BanaKey[6], MifareKey[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
-
-//TN32MSEC003S
-char FW_TN32[] = { 'T', 'N', '3', '2', 'M', 'S', 'E', 'C', '0', '0', '3', 'S', ' ', 'F', '/', 'W', ' ', 'V', 'e', 'r', '1', '.', '2' };
-char HW_TN32[] = { 'T', 'N', '3', '2', 'M', 'S', 'E', 'C', '0', '0', '3', 'S', ' ', 'H', '/', 'W', ' ', 'V', 'e', 'r', '3', '.', '0' };
-char BOARD_TN32[] = { '1', '5', '0', '8', '4', 0xFF, 0x10, 0x00, 0x12 };
-
-//837-15396
-char FW_837[] = { 0x94 };
-char HW_837[] = { '8', '3', '7', '-', '1', '5', '3', '9', '6' };
-char BOARD_837[] = { '0', '0', '0', '-', '0', '0', '0', '0', '0', 0xFF, 0x11, 0x40 };
-
 enum {
-  SG_NFC_CMD_GET_FW_VERSION = 0x30,
-  SG_NFC_CMD_GET_HW_VERSION = 0x32,
-  SG_NFC_CMD_RADIO_ON = 0x40,
-  SG_NFC_CMD_RADIO_OFF = 0x41,
-  SG_NFC_CMD_POLL = 0x42,
-  SG_NFC_CMD_MIFARE_SELECT_TAG = 0x43,
-  SG_NFC_CMD_MIFARE_SET_KEY_BANA = 0x50,
-  SG_NFC_CMD_BANA_AUTHENTICATE = 0x51,
-  SG_NFC_CMD_MIFARE_READ_BLOCK = 0x52,
-  SG_NFC_CMD_MIFARE_SET_KEY_AIME = 0x54,
-  SG_NFC_CMD_AIME_AUTHENTICATE = 0x55,
-  SG_NFC_CMD_TO_UPDATER_MODE = 0x60,
-  SG_NFC_CMD_SEND_HEX_DATA = 0x61,
-  SG_NFC_CMD_RESET = 0x62,
-  SG_NFC_CMD_FELICA_ENCAP = 0x71,
-  SG_RGB_CMD_SET_COLOR = 0x81,
-  SG_RGB_CMD_GET_INFO = 0xF0,
-  SG_RGB_CMD_RESET = 0xF5,
-
-  //FELICA_ENCAP
-  FELICA_CMD_POLL = 0x00,
-  FELICA_CMD_NDA_06 = 0x06,
-  FELICA_CMD_NDA_08 = 0x08,
-  FELICA_CMD_GET_SYSTEM_CODE = 0x0C,
-  FELICA_CMD_NDA_A4 = 0xA4,
+  CMD_GET_FW_VERSION = 0x30,
+  CMD_GET_HW_VERSION = 0x32,
+  // Card read
+  CMD_START_POLLING = 0x40,
+  CMD_STOP_POLLING = 0x41,
+  CMD_CARD_DETECT = 0x42,
+  CMD_CARD_SELECT = 0x43,
+  CMD_CARD_HALT = 0x44,
+  // MIFARE
+  CMD_MIFARE_KEY_SET_A = 0x50,
+  CMD_MIFARE_AUTHORIZE_A = 0x51,
+  CMD_MIFARE_READ = 0x52,
+  CMD_MIFARE_WRITE = 0x53,
+  CMD_MIFARE_KEY_SET_B = 0x54,
+  CMD_MIFARE_AUTHORIZE_B = 0x55,
+  // Boot,update
+  CMD_TO_UPDATER_MODE = 0x60,
+  CMD_SEND_HEX_DATA = 0x61,
+  CMD_TO_NORMAL_MODE = 0x62,
+  CMD_SEND_BINDATA_INIT = 0x63,
+  CMD_SEND_BINDATA_EXEC = 0x64,
+  // FeliCa
+  CMD_FELICA_PUSH = 0x70,
+  CMD_FELICA_THROUGH = 0x71,
+  CMD_FELICA_THROUGH_POLL = 0x00,
+  CMD_FELICA_THROUGH_READ = 0x06,
+  CMD_FELICA_THROUGH_WRITE = 0x08,
+  CMD_FELICA_THROUGH_GET_SYSTEM_CODE = 0x0C,
+  CMD_FELICA_THROUGH_NDA_A4 = 0xA4,
+  // LED board
+  CMD_EXT_BOARD_LED = 0x80,
+  CMD_EXT_BOARD_LED_RGB = 0x81,
+  CMD_EXT_BOARD_LED_RGB_UNKNOWN = 0x82,  // 未知
+  CMD_EXT_BOARD_INFO = 0xf0,
+  CMD_EXT_FIRM_SUM = 0xf2,
+  CMD_EXT_SEND_HEX_DATA = 0xf3,
+  CMD_EXT_TO_BOOT_MODE = 0xf4,
+  CMD_EXT_TO_NORMAL_MODE = 0xf5,
 };
 
-typedef union packet_req {
+enum {  // 未确认效果
+  ERROR_NONE = 0,
+  ERROR_NFCRW_INIT_ERROR = 1,
+  ERROR_NFCRW_FIRMWARE_UP_TO_DATE = 3,
+  ERROR_NFCRW_ACCESS_ERROR = 4,
+  ERROR_CARD_DETECT_TIMEOUT = 5,
+  ERROR_CARD_DETECT_ERROR = 32,
+  ERROR_FELICA_ERROR = 33,
+};
+
+typedef union {
   uint8_t bytes[128];
   struct {
     uint8_t frame_len;
@@ -98,38 +145,38 @@ typedef union packet_req {
     uint8_t cmd;
     uint8_t payload_len;
     union {
-      uint8_t key[6];            //sg_nfc_req_mifare_set_key(bana or aime)
-      uint8_t color_payload[3];  //sg_led_req_set_color
-      struct {                   //sg_nfc_cmd_mifare_select_tag,sg_nfc_cmd_mifare_authenticate,sg_nfc_cmd_mifare_read_block
+      uint8_t key[6];            // CMD_MIFARE_KEY_SET
+      uint8_t color_payload[3];  // CMD_EXT_BOARD_LED_RGB
+      struct {                   // CMD_CARD_SELECT,AUTHORIZE,READ
         uint8_t uid[4];
         uint8_t block_no;
       };
-      struct {  //sg_nfc_req_felica_encap
+      struct {  // CMD_FELICA_THROUGH
         uint8_t encap_IDm[8];
         uint8_t encap_len;
         uint8_t encap_code;
         union {
-          struct {
+          struct {  // CMD_FELICA_THROUGH_POLL
             uint8_t poll_systemCode[2];
             uint8_t poll_requestCode;
             uint8_t poll_timeout;
           };
-          struct {  //NDA_06,NDA_08,NDA_A4
+          struct {  // CMD_FELICA_THROUGH_READ,WRITE,NDA_A4
             uint8_t RW_IDm[8];
-            uint8_t numService;  //and NDA_A4 unknown byte
+            uint8_t numService;
             uint8_t serviceCodeList[2];
             uint8_t numBlock;
-            uint8_t blockList[1][2];
-            uint8_t blockData[16];  //WriteWithoutEncryption,ignore
+            uint8_t blockList[1][2];  // CMD_FELICA_THROUGH_READ
+            uint8_t blockData[16];    // CMD_FELICA_THROUGH_WRITE
           };
           uint8_t felica_payload[1];
         };
       };
     };
   };
-} packet_req_t;
+} packet_request_t;
 
-typedef union packet_res {
+typedef union {
   uint8_t bytes[128];
   struct {
     uint8_t frame_len;
@@ -139,9 +186,9 @@ typedef union packet_res {
     uint8_t status;
     uint8_t payload_len;
     union {
-      char version[1];    //sg_nfc_res_get_fw_version,sg_nfc_res_get_hw_version,sg_led_res_get_info
-      uint8_t block[16];  //sg_nfc_res_mifare_read_block
-      struct {            //sg_nfc_res_poll
+      uint8_t version[1];  // CMD_GET_FW_VERSION,CMD_GET_HW_VERSION,CMD_EXT_BOARD_INFO
+      uint8_t block[16];   // CMD_MIFARE_READ
+      struct {             // CMD_CARD_DETECT
         uint8_t count;
         uint8_t type;
         uint8_t id_len;
@@ -153,33 +200,31 @@ typedef union packet_res {
           };
         };
       };
-      struct {  //sg_nfc_res_felica_encap
+      struct {  // CMD_FELICA_THROUGH
         uint8_t encap_len;
         uint8_t encap_code;
         uint8_t encap_IDm[8];
         union {
-          struct {  //FELICA_CMD_POLL
+          struct {  // FELICA_CMD_POLL
             uint8_t poll_PMm[8];
             uint8_t poll_systemCode[2];
           };
           struct {
-            uint8_t RW_status[2];         //猜测,NDA_06,NDA_08
-            uint8_t numBlock;             //NDA_06
-            uint8_t blockData[1][1][16];  //NDA_06
+            uint8_t RW_status[2];
+            uint8_t numBlock;
+            uint8_t blockData[1][1][16];
           };
           uint8_t felica_payload[1];
         };
       };
     };
   };
-} packet_res_t;
+} packet_response_t;
 
-static packet_req_t req;
-static packet_res_t res;
-static uint8_t len, r, checksum;
-static bool escape = false;
+packet_request_t req;
+packet_response_t res;
 
-static uint8_t packet_read() {
+uint8_t packet_read() {
   while (SerialDevice.available()) {
     r = SerialDevice.read();
     if (r == 0xE0) {
@@ -209,7 +254,7 @@ static uint8_t packet_read() {
   return 0;
 }
 
-static void packet_write() {
+void packet_write() {
   uint8_t checksum = 0, len = 0;
   if (res.cmd == 0) {
     return;
@@ -234,228 +279,183 @@ static void packet_write() {
   res.cmd = 0;
 }
 
-static void sg_res_init(uint8_t payload_len = 0) {  //初始化模板
+void res_init(uint8_t payload_len = 0) {
   res.frame_len = 6 + payload_len;
   res.addr = req.addr;
   res.seq_no = req.seq_no;
   res.cmd = req.cmd;
-  res.status = 0;
+  res.status = ERROR_NONE;
   res.payload_len = payload_len;
 }
 
-static void sg_nfc_cmd_reset() {
+void sys_to_normal_mode() {
+  res_init();
   if (nfc.getFirmwareVersion()) {
-    sg_res_init();
-    res.status = 3;
+    res.status = ERROR_NFCRW_FIRMWARE_UP_TO_DATE;
     u8g2.drawXBM(95, 0, 16, 16, blank);
     u8g2.drawXBM(113, 0, 16, 16, blank);
-    u8g2.sendBuffer();
-    return;
-  }
-  u8g2.drawXBM(95, 0, 16, 16, rf_off);
-  u8g2.sendBuffer();
-  FastLED.showColor(CRGB::Red);
-  while (true) {};
-}
-
-static void sg_nfc_cmd_get_fw_version() {
-  if (FWSW) {
-    sg_res_init(sizeof(FW_TN32));
-    memcpy(res.version, FW_TN32, res.payload_len);
   } else {
-    sg_res_init(sizeof(FW_837));
-    memcpy(res.version, FW_837, res.payload_len);
+    res.status = ERROR_NFCRW_INIT_ERROR;
+    u8g2.drawXBM(95, 0, 16, 16, rf_off);
+    FastLED.showColor(0xFF0000);
   }
 }
 
-static void sg_nfc_cmd_get_hw_version() {
+void sys_get_fw_version() {
   if (FWSW) {
-    sg_res_init(sizeof(HW_TN32));
-    memcpy(res.version, HW_TN32, res.payload_len);
+    res_init(sizeof(old_fw_version) - 1);
+    memcpy(res.version, old_fw_version, res.payload_len);
   } else {
-    sg_res_init(sizeof(HW_837));
-    memcpy(res.version, HW_837, res.payload_len);
+    res_init(sizeof(new_fw_version) - 1);
+    memcpy(res.version, new_fw_version, res.payload_len);
   }
 }
 
-static void sg_led_cmd_get_info() {
+void sys_get_hw_version() {
   if (FWSW) {
-    sg_res_init(sizeof(BOARD_TN32));
-    memcpy(res.version, BOARD_TN32, res.payload_len);
+    res_init(sizeof(old_hw_version) - 1);
+    memcpy(res.version, old_hw_version, res.payload_len);
   } else {
-    sg_res_init(sizeof(BOARD_837));
-    memcpy(res.version, BOARD_837, res.payload_len);
+    res_init(sizeof(new_hw_version));
+    memcpy(res.version, new_hw_version, res.payload_len);
   }
 }
 
-static void sg_nfc_cmd_mifare_set_key_aime() {
-  sg_res_init();
-  memcpy(AimeKey, req.key, 6);
+void sys_get_led_info() {
+  if (FWSW) {
+    res_init(sizeof(old_led_info) - 1);
+    memcpy(res.version, old_led_info, res.payload_len);
+  } else {
+    res_init(sizeof(new_led_info) - 1);
+    memcpy(res.version, new_led_info, res.payload_len);
+  }
 }
 
-static void sg_nfc_cmd_mifare_set_key_bana() {
-  sg_res_init();
-  memcpy(BanaKey, req.key, 6);
-}
 
-static void sg_led_cmd_reset() {
-  sg_res_init();
-}
-
-static void sg_led_cmd_set_color() {
-  FastLED.showColor(CRGB(req.color_payload[0], req.color_payload[1], req.color_payload[2]));
-}
-
-static void sg_nfc_cmd_radio_on() {
-  sg_res_init();
+void nfc_start_polling() {
+  res_init();
   nfc.setRFField(0x00, 0x01);
   u8g2.drawXBM(95, 0, 16, 16, rf_open);
-  u8g2.sendBuffer();
 }
 
-static void sg_nfc_cmd_radio_off() {
-  sg_res_init();
+void nfc_stop_polling() {
+  res_init();
   nfc.setRFField(0x00, 0x00);
   u8g2.drawXBM(95, 0, 16, 16, blank);
-  u8g2.sendBuffer();
 }
 
-static void sg_nfc_cmd_poll() {  //卡号发送
+void nfc_card_detect() {
+  uint16_t SystemCode;
+  uint8_t bufferLength;
   if (!digitalRead(SW3_CARD)) {
     memcpy(res.mifare_uid, mifare_data[0], 0x04);
     res.id_len = 0x04;
-    sg_res_init(0x07);
+    res_init(0x07);
     res.count = 1;
     res.type = 0x10;
-    u8g2.drawXBM(113, 0, 16, 16, card);
-    u8g2.sendBuffer();
-    return;
-  }
-  uint16_t SystemCode;
-  if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, res.mifare_uid, &res.id_len)) {
-    sg_res_init(0x07);
+  } else if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, res.mifare_uid, &res.id_len) && nfc.getBuffer(&bufferLength)[4] == 0x08) {  // Only read cards with sak=0x08
+    res_init(0x07);
     res.count = 1;
     res.type = 0x10;
-  } else if (nfc.felica_Polling(0xFFFF, 0x00, res.IDm, res.PMm, &SystemCode, 200) == 1) {  //< 0: error
-    sg_res_init(0x13);
+  } else if (nfc.felica_Polling(0xFFFF, 0x00, res.IDm, res.PMm, &SystemCode, 200) == 1) {
+    res_init(0x13);
     res.count = 1;
     res.type = 0x20;
     res.id_len = 0x10;
   } else {
-    sg_res_init(1);
+    res_init(1);
     res.count = 0;
+    res.status = ERROR_NONE;
     u8g2.drawXBM(113, 0, 16, 16, blank);
-    u8g2.sendBuffer();
     return;
   }
   u8g2.drawXBM(113, 0, 16, 16, card);
-  u8g2.sendBuffer();
 }
 
-static void sg_nfc_cmd_aime_authenticate() {
-  sg_res_init();
-  if (!digitalRead(SW3_CARD)) {
-    uint8_t key_block_no = (req.block_no / 4) * 4 + 3;
-    if (memcmp(AimeKey, mifare_data[key_block_no] + 10, 6)) {  // Key B
-      res.status = 1;
-    }
-    return;
-  }
-  if (nfc.mifareclassic_AuthenticateBlock(req.uid, 4, req.block_no, 1, AimeKey)) {
-    return;
-  } else {
-    res.status = 1;
+void nfc_mifare_authorize_a() {
+  res_init();
+  if (!nfc.mifareclassic_AuthenticateBlock(req.uid, 4, req.block_no, 0, KeyA)) {
+    res.status = ERROR_NFCRW_ACCESS_ERROR;
   }
 }
 
-static void sg_nfc_cmd_bana_authenticate() {
-  sg_res_init();
-  if (!digitalRead(SW3_CARD)) {
-    uint8_t key_block_no = (req.block_no / 4) * 4 + 3;
-    if (memcmp(BanaKey, mifare_data[key_block_no], 6)) {
-      res.status = 1;
-    }
-    return;
-  }
-  if (nfc.mifareclassic_AuthenticateBlock(req.uid, 4, req.block_no, 0, BanaKey)) {
-    return;
-  } else {
-    res.status = 1;
+void nfc_mifare_authorize_b() {
+  res_init();
+  if (!nfc.mifareclassic_AuthenticateBlock(req.uid, 4, req.block_no, 1, KeyB)) {
+    res.status = ERROR_NFCRW_ACCESS_ERROR;
   }
 }
 
-static void sg_nfc_cmd_mifare_read_block() {  //读取卡扇区数据
+void nfc_mifare_read() {
+  res_init(0x10);
   if (!digitalRead(SW3_CARD)) {
     memcpy(res.block, mifare_data[req.block_no], 16);
-    sg_res_init(0x10);
+    res_init(0x10);
     return;
+  } else if (!nfc.mifareclassic_ReadDataBlock(req.block_no, res.block)) {
+    res_init();
+    res.status = ERROR_CARD_DETECT_TIMEOUT;  // TODO
   }
-  if (nfc.mifareclassic_ReadDataBlock(req.block_no, res.block)) {
-    sg_res_init(0x10);
-    return;
-  }
-  sg_res_init();
-  res.status = 1;
 }
 
-static void sg_nfc_cmd_felica_encap() {
+void nfc_felica_through() {
   uint16_t SystemCode;
   if (nfc.felica_Polling(0xFFFF, 0x01, res.encap_IDm, res.poll_PMm, &SystemCode, 200) == 1) {
-    SystemCode = SystemCode >> 8 | SystemCode << 8;  //SystemCode，大小端反转注意
+    SystemCode = SystemCode >> 8 | SystemCode << 8;
   } else {
-    sg_res_init();
-    res.status = 1;
+    res_init();
+    res.status = ERROR_FELICA_ERROR;
     return;
   }
   uint8_t code = req.encap_code;
   res.encap_code = code + 1;
   switch (code) {
-    case FELICA_CMD_POLL:
+    case CMD_FELICA_THROUGH_POLL:
       {
-        sg_res_init(0x14);
+        res_init(0x14);
         res.poll_systemCode[0] = SystemCode;
         res.poll_systemCode[1] = SystemCode >> 8;
       }
       break;
-    case FELICA_CMD_GET_SYSTEM_CODE:
+    case CMD_FELICA_THROUGH_GET_SYSTEM_CODE:
       {
-        sg_res_init(0x0D);
-        res.felica_payload[0] = 0x01;        //未知
-        res.felica_payload[1] = SystemCode;  //SystemCode
+        res_init(0x0D);
+        res.felica_payload[0] = 0x01;
+        res.felica_payload[1] = SystemCode;
         res.felica_payload[2] = SystemCode >> 8;
       }
       break;
-    case FELICA_CMD_NDA_A4:
+    case CMD_FELICA_THROUGH_NDA_A4:
       {
-        sg_res_init(0x0B);
+        res_init(0x0B);
         res.felica_payload[0] = 0x00;
       }
       break;
-    case FELICA_CMD_NDA_06:
+    case CMD_FELICA_THROUGH_READ:
       {
-        uint16_t serviceCodeList[1] = { (uint16_t)(req.serviceCodeList[1] << 8 | req.serviceCodeList[0]) };  //大小端反转注意
+        uint16_t serviceCodeList[1] = { (uint16_t)(req.serviceCodeList[1] << 8 | req.serviceCodeList[0]) };
         for (uint8_t i = 0; i < req.numBlock; i++) {
           uint16_t blockList[1] = { (uint16_t)(req.blockList[i][0] << 8 | req.blockList[i][1]) };
           if (nfc.felica_ReadWithoutEncryption(1, serviceCodeList, 1, blockList, res.blockData[i]) != 1) {
-            memset(res.blockData[i], 0, 16);  //dummy data
+            memset(res.blockData[i], 0, 16);  // dummy data
           }
         }
         res.RW_status[0] = 0;
         res.RW_status[1] = 0;
         res.numBlock = req.numBlock;
-        sg_res_init(0x0D + req.numBlock * 16);
+        res_init(0x0D + req.numBlock * 16);
       }
       break;
-    case FELICA_CMD_NDA_08:
+    case CMD_FELICA_THROUGH_WRITE:
       {
-        sg_res_init(0x0C);  //此处应有写入卡，但是不打算实现
+        res_init(0x0C);  // WriteWithoutEncryption,ignore
         res.RW_status[0] = 0;
         res.RW_status[1] = 0;
       }
       break;
     default:
-      sg_res_init();
-      res.status = 1;
+      res_init();
+      res.status = ERROR_FELICA_ERROR;
   }
   res.encap_len = res.payload_len;
 }
