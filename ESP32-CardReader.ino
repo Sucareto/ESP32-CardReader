@@ -1,49 +1,20 @@
-#ifdef ARDUINO_NodeMCU_32S
-#pragma message "当前的开发板是 NodeMCU_32S"
-#define SerialDevice Serial
-#define LED_PIN 13
-#define PN532_SPI_SS 5
-
-
-#define SW1_MODE 33
-#define SW2_OTA 25
-#define SW3_CARD 26
-#define SW4_FW 27
-bool ReaderMode, FWSW;
-
-// #define OTA_Enable
-#ifdef OTA_Enable
-#pragma message "已开启 OTA 更新功能"
-#define STASSID "SSIDNAME"
-#define STAPASS "PASSWORD"
-#define OTA_URL "http://esp-update.local/Sucareto/ESP32-Reader:2333/"
-#include <WiFi.h>
-#include <HTTPUpdate.h>
-#endif
-
-#else
-#error "未适配的开发板！！！"
-#endif
-
 #include "ReaderCmd.h"
+
 void (*ReaderMain)();
-unsigned long ConnectTime = 0;
-bool ConnectStatus = false;
-uint16_t SleepDelay = 10000;  // ms
 
 void setup() {
   pinMode(SW1_MODE, INPUT_PULLUP);  // Switch mode
-  pinMode(SW2_OTA, INPUT_PULLUP);   // Enable OTA
   pinMode(SW3_CARD, INPUT_PULLUP);  // Hardcode mifare
   pinMode(SW4_FW, INPUT_PULLUP);    // (Aime) Baudrate & fw/hw | (Spice) 1P 2P
-
   u8g2.begin();
   u8g2.setFont(u8g2_font_6x12_mf);
+  u8g2.clearBuffer();
   FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, 8);
   FastLED.setBrightness(20);  // LED brightness
   FastLED.showColor(0);
 
-#ifdef OTA_Enable
+#ifdef OTA_Enable                  // update check
+  pinMode(SW2_OTA, INPUT_PULLUP);  // Enable OTA
   if (!digitalRead(SW2_OTA)) {
     WiFi.begin(STASSID, STAPASS);
     u8g2.drawStr(0, 28, "WiFi Connecting...");
@@ -61,7 +32,6 @@ void setup() {
       case HTTP_UPDATE_FAILED:
         u8g2.drawStr(0, 41, "Check failed.          ");
         break;
-
       case HTTP_UPDATE_NO_UPDATES:
         u8g2.drawStr(0, 41, "Already up to date.          ");
         break;
@@ -82,6 +52,7 @@ void setup() {
   nfc.SAMConfig();
   u8g2.clearBuffer();
 
+  // mode select
   ReaderMode = !digitalRead(SW1_MODE);
   FWSW = !digitalRead(SW4_FW);
   if (ReaderMode) {  // BEMANI mode
@@ -98,9 +69,11 @@ void setup() {
     FastLED.showColor(FWSW ? CRGB::Green : CRGB::Blue);
     ReaderMain = AimeCardReader;
   }
-  memset(&req, 0, sizeof(req.bytes));
-  memset(&res, 0, sizeof(res.bytes));
+
+  memset(req.bytes, 0, sizeof(req.bytes));
+  memset(res.bytes, 0, sizeof(res.bytes));
   u8g2.sendBuffer();
+
   ConnectTime = millis();
   ConnectStatus = true;
 }
@@ -108,6 +81,7 @@ void setup() {
 
 void loop() {
   ReaderMain();
+
   if (ConnectStatus) {
     if ((millis() - ConnectTime) > SleepDelay) {
       u8g2.sleepOn();
@@ -126,7 +100,7 @@ void SpiceToolsReader() {  // Spice mode
   uint16_t SystemCode;
   char card_id[17];
   if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, res.mifare_uid, &res.id_len)
-      && nfc.mifareclassic_AuthenticateBlock(res.mifare_uid, res.id_len, 1, 0, MifareKey)
+      && nfc.mifareclassic_AuthenticateBlock(res.mifare_uid, res.id_len, 1, 0, DefaultKey)
       && nfc.mifareclassic_ReadDataBlock(1, res.block)) {
     sprintf(card_id, "%02X%02X%02X%02X%02X%02X%02X%02X",
             res.block[0], res.block[1], res.block[2], res.block[3],
@@ -167,59 +141,62 @@ void SpiceToolsReader() {  // Spice mode
 
 void AimeCardReader() {  // Aime mode
   switch (packet_read()) {
-    case SG_NFC_CMD_RESET:
-      sg_nfc_cmd_reset();
-      break;
-    case SG_NFC_CMD_GET_FW_VERSION:
-      sg_nfc_cmd_get_fw_version();
-      break;
-    case SG_NFC_CMD_GET_HW_VERSION:
-      sg_nfc_cmd_get_hw_version();
-      break;
-    case SG_NFC_CMD_POLL:
-      sg_nfc_cmd_poll();
-      break;
-    case SG_NFC_CMD_MIFARE_READ_BLOCK:
-      sg_nfc_cmd_mifare_read_block();
-      break;
-    case SG_NFC_CMD_FELICA_ENCAP:
-      sg_nfc_cmd_felica_encap();
-      break;
-    case SG_NFC_CMD_AIME_AUTHENTICATE:
-      sg_nfc_cmd_aime_authenticate();
-      break;
-    case SG_NFC_CMD_BANA_AUTHENTICATE:
-      sg_nfc_cmd_bana_authenticate();
-      break;
-    case SG_NFC_CMD_MIFARE_SELECT_TAG:
-      sg_res_init();
-      break;
-    case SG_NFC_CMD_MIFARE_SET_KEY_AIME:
-      sg_nfc_cmd_mifare_set_key_aime();
-      break;
-    case SG_NFC_CMD_MIFARE_SET_KEY_BANA:
-      sg_nfc_cmd_mifare_set_key_bana();
-      break;
-    case SG_NFC_CMD_RADIO_ON:
-      sg_nfc_cmd_radio_on();
-      break;
-    case SG_NFC_CMD_RADIO_OFF:
-      sg_nfc_cmd_radio_off();
-      break;
-    case SG_RGB_CMD_RESET:
-      sg_led_cmd_reset();
-      break;
-    case SG_RGB_CMD_GET_INFO:
-      sg_led_cmd_get_info();
-      break;
-    case SG_RGB_CMD_SET_COLOR:
-      sg_led_cmd_set_color();
-      break;
     case 0:
       return;
+    case CMD_TO_NORMAL_MODE:
+      sys_to_normal_mode();
+      break;
+    case CMD_GET_FW_VERSION:
+      sys_get_fw_version();
+      break;
+    case CMD_GET_HW_VERSION:
+      sys_get_hw_version();
+      break;
+    // Card read
+    case CMD_START_POLLING:
+      nfc_start_polling();
+      break;
+    case CMD_STOP_POLLING:
+      nfc_stop_polling();
+      break;
+    case CMD_CARD_DETECT:
+      nfc_card_detect();
+      break;
+    // MIFARE
+    case CMD_MIFARE_KEY_SET_A:
+      memcpy(KeyA, req.key, 6);
+      res_init();
+      break;
+    case CMD_MIFARE_KEY_SET_B:
+      res_init();
+      memcpy(KeyB, req.key, 6);
+      break;
+    case CMD_MIFARE_AUTHORIZE_A:
+      nfc_mifare_authorize_a();
+      break;
+    case CMD_MIFARE_AUTHORIZE_B:
+      nfc_mifare_authorize_b();
+      break;
+    case CMD_MIFARE_READ:
+      nfc_mifare_read();
+      break;
+    // FeliCa
+    case CMD_FELICA_THROUGH:
+      nfc_felica_through();
+      break;
+    // LED
+    case CMD_EXT_BOARD_LED_RGB:
+      FastLED.showColor(CRGB(req.color_payload[0], req.color_payload[1], req.color_payload[2]));
+      break;
+    case CMD_EXT_BOARD_INFO:
+      sys_get_led_info();
+      break;
+    case CMD_EXT_BOARD_LED_RGB_UNKNOWN:
+      break;
     default:
-      sg_res_init();
+      res_init();
   }
+  u8g2.sendBuffer();
   ConnectTime = millis();
   packet_write();
 }
