@@ -65,7 +65,7 @@ void setup() {
     SerialDevice.begin(FWSW ? 38400 : 115200);
     u8g2.drawStr(0, 16, "Aime Reader");
     u8g2.drawStr(105, 64, FWSW ? "LOW" : "HIGH");
-    u8g2.drawStr(0, 64, FWSW ? "TN32MSEC003S" : "837-15396");
+    u8g2.drawStr(0, 64, FWSW ? "TN32MSEC003S" : new_hw_version);
     FastLED.showColor(FWSW ? CRGB::Green : CRGB::Blue);
     ReaderMain = AimeCardReader;
   }
@@ -181,9 +181,9 @@ void AimeCardReader() {  // Aime mode
       nfc_mifare_read();
       break;
     // FeliCa
-    case CMD_FELICA_THROUGH:
-      nfc_felica_through();
-      break;
+    // case CMD_FELICA_THROUGH:
+    //   nfc_felica_through();
+    //   break;
     // LED
     case CMD_EXT_BOARD_LED_RGB:
       FastLED.showColor(CRGB(req.color_payload[0], req.color_payload[1], req.color_payload[2]));
@@ -193,8 +193,22 @@ void AimeCardReader() {  // Aime mode
       break;
     case CMD_EXT_BOARD_LED_RGB_UNKNOWN:
       break;
+    case CMD_CARD_SELECT:
+    case CMD_CARD_HALT:
+    case CMD_EXT_TO_NORMAL_MODE:
+    case CMD_TO_UPDATER_MODE:
+    case CMD_SEND_HEX_DATA:
+      res_init();
+      break;
+
+    case STATUS_SUM_ERROR:
+      res_init();
+      res.status = STATUS_SUM_ERROR;
+      break;
+
     default:
       res_init();
+      res.status = STATUS_INVALID_COMMAND;
   }
   u8g2.sendBuffer();
   ConnectTime = millis();

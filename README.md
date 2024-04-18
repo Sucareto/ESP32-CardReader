@@ -27,6 +27,7 @@ https://user-images.githubusercontent.com/28331534/170975661-137f3474-f61a-4a4d-
 ### PCB 设计：
 - 该 PCB 方案仅用于我自己快速测试，并非最佳实现方案
 - 如果需要使用此 PCB 方案，请务必把 logo 删掉，然后根据需求认真审查 PCB 设计并作出修改后再进行制作
+- 建议使用 PN532 HSU 模式，可以去掉 TTL 拨码开关，需要直通 PN532 时，在代码里实现 Serial 数据转发
 
 
 ### 拨码开关：
@@ -67,15 +68,13 @@ https://user-images.githubusercontent.com/28331534/170975661-137f3474-f61a-4a4d-
 
 [index.php](OTA/index.php) 默认是判断文件 MD5 是否一致，不一致就会发送更新。
 
-## 感谢：
+## 参考：
 
 - 原项目：[Arduino-Aime-Reader](https://github.com/Sucareto/Arduino-Aime-Reader)
-- 驱动 WS2812B：[FastLED](https://github.com/FastLED/FastLED)
 - 操作 SSD1306：[u8g2](https://github.com/olikraus/u8g2)
-- Spice 通信（已复制到本仓库并根据需要修改了部分代码）：[SpiceAPI](https://github.com/spicetools/spicetools/tree/master/api/resources/arduino) 
-- 驱动 PN532（已复制到本仓库并根据需要修改了部分代码）：[PN532](https://github.com/elechouse/PN532)
 - OLED 显示图案设计：PCtoLCD2002
-- AimePad 盖板设计：[CoolBreezeArcanine](https://github.com/CoolBreezeArcanine)
+- Spice 通信参考：[PN5180-cardio SpiceAPI branch](https://github.com/CrazyRedMachine/PN5180-cardio/tree/SpiceAPI)
+- Spice 通信（已复制到本仓库并根据需要修改了部分代码）：[SpiceAPI](https://github.com/spicetools/spicetools/tree/master/api/resources/arduino)
 - PCB 图案：[妖夢 - ぷりん](https://www.pixiv.net/artworks/87578487)
 - OTA 代码参考：[OTA Updates](https://arduino-esp8266.readthedocs.io/en/latest/ota_updates/readme.html#http-server)
-- Spice 通信参考：[PN5180-cardio SpiceAPI branch](https://github.com/CrazyRedMachine/PN5180-cardio/tree/SpiceAPI)
+
