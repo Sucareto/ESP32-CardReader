@@ -197,10 +197,17 @@ void AimeCardReader() {  // Aime mode
     case CMD_CARD_HALT:
     case CMD_EXT_TO_NORMAL_MODE:
     case CMD_TO_UPDATER_MODE:
-    case CMD_SEND_HEX_DATA:
+    case CMD_SEND_BINDATA_INIT:
       res_init();
       break;
-
+    case CMD_SEND_BINDATA_EXEC:
+      res_init();
+      res.status = STATUS_FIRM_UPDATE_SUCCESS;
+      break;
+    case CMD_SEND_HEX_DATA:
+      res_init();
+      res.status = STATUS_COMP_DUMMY_3RD;
+      break;
     case STATUS_SUM_ERROR:
       res_init();
       res.status = STATUS_SUM_ERROR;

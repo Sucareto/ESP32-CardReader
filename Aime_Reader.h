@@ -1,8 +1,8 @@
-#ifdef ESP32
+#if defined(ESP32)
 #pragma message "当前的开发板是 ESP32"
 #define SerialDevice Serial
-#define LED_PIN 13
 #define PN532_SPI_SS 5
+#define LED_PIN 13
 
 #define SW1_MODE 33
 #define SW2_OTA 25
@@ -31,15 +31,13 @@
 #define new_hw_version "837-15396"
 #define new_led_info "000-00000\xFF\x11\x40"
 
-bool ReaderMode, FWSW;
+  bool ReaderMode, FWSW;
 uint8_t len, r, checksum;
 bool escape = false;
 unsigned long ConnectTime = 0;
 bool ConnectStatus = false;
 uint16_t SleepDelay = 10000;  // ms
 
-#include "FastLED.h"
-CRGB leds[8];
 
 #include <SPI.h>
 #include <PN532_SPI.h>
@@ -47,6 +45,11 @@ PN532_SPI pn532(SPI, PN532_SPI_SS);
 
 #include "PN532.h"
 PN532 nfc(pn532);
+
+#include "FastLED.h"
+#define NUM_LEDS 8
+CRGB leds[NUM_LEDS];
+
 uint8_t KeyA[6], KeyB[6];
 uint8_t DefaultKey[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
@@ -105,8 +108,8 @@ enum {
   CMD_TO_UPDATER_MODE = 0x60,
   CMD_SEND_HEX_DATA = 0x61,
   CMD_TO_NORMAL_MODE = 0x62,
-  // CMD_SEND_BINDATA_INIT = 0x63,
-  // CMD_SEND_BINDATA_EXEC = 0x64,
+  CMD_SEND_BINDATA_INIT = 0x63,
+  CMD_SEND_BINDATA_EXEC = 0x64,
   // FeliCa
   // CMD_FELICA_PUSH = 0x70,
   CMD_FELICA_THROUGH = 0x71,
@@ -122,15 +125,6 @@ enum {
 };
 
 enum {
-  FelicaPolling = 0x00,
-  FelicaReqResponce = 0x04,
-  FelicaReadWithoutEncryptData = 0x06,
-  FelicaWriteWithoutEncryptData = 0x08,
-  FelicaReqSysCode = 0x0C,
-  FelicaActive2 = 0xA4,
-};
-
-enum {
   STATUS_OK = 0x00,
   STATUS_CARD_ERROR = 0x01,
   STATUS_NOT_ACCEPT = 0x02,
@@ -140,8 +134,8 @@ enum {
   STATUS_INTERNAL_ERROR = 0x06,
   STATUS_INVALID_FIRM_DATA = 0x07,
   STATUS_FIRM_UPDATE_SUCCESS = 0x08,
-  STATUS_COMP_DUMMY_2ND = 0x10,
-  STATUS_COMP_DUMMY_3RD = 0x20,
+  STATUS_COMP_DUMMY_2ND = 0x10,  // 837-15286
+  STATUS_COMP_DUMMY_3RD = 0x20,  // 837-15396
 };
 
 typedef union {
@@ -161,24 +155,7 @@ typedef union {
       };
       struct {  // CMD_FELICA_THROUGH
         uint8_t encap_IDm[8];
-        uint8_t encap_len;
-        uint8_t encap_code;
-        union {
-          struct {  // CMD_FELICA_THROUGH_POLL
-            uint8_t poll_systemCode[2];
-            uint8_t poll_requestCode;
-            uint8_t poll_timeout;
-          };
-          struct {  // CMD_FELICA_THROUGH_READ,WRITE,NDA_A4
-            uint8_t RW_IDm[8];
-            uint8_t numService;
-            uint8_t serviceCodeList[2];
-            uint8_t numBlock;
-            uint8_t blockList[1][2];  // CMD_FELICA_THROUGH_READ
-            uint8_t blockData[16];    // CMD_FELICA_THROUGH_WRITE
-          };
-          uint8_t felica_payload[1];
-        };
+        uint8_t felica_through_payload[1];
       };
     };
   };
@@ -208,23 +185,7 @@ typedef union {
           };
         };
       };
-      struct {  // CMD_FELICA_THROUGH
-        uint8_t encap_len;
-        uint8_t encap_code;
-        uint8_t encap_IDm[8];
-        union {
-          struct {  // FELICA_CMD_POLL
-            uint8_t poll_PMm[8];
-            uint8_t poll_systemCode[2];
-          };
-          struct {
-            uint8_t RW_status[2];
-            uint8_t numBlock;
-            uint8_t blockData[1][1][16];
-          };
-          uint8_t felica_payload[1];
-        };
-      };
+      uint8_t felica_through_payload[1];
     };
   };
 } packet_response_t;
@@ -255,6 +216,7 @@ uint8_t packet_read() {
     }
     req.bytes[++len] = r;
     if (len == req.frame_len) {
+      if (req.cmd == CMD_SEND_BINDATA_EXEC) return req.cmd;
       return checksum == r ? req.cmd : STATUS_SUM_ERROR;
     }
     checksum += r;
@@ -405,63 +367,11 @@ void nfc_mifare_read() {
 }
 
 void nfc_felica_through() {
-  uint16_t SystemCode;
-  if (nfc.felica_Polling(0xFFFF, 0x01, res.encap_IDm, res.poll_PMm, &SystemCode, 200) == 1) {
-    SystemCode = SystemCode >> 8 | SystemCode << 8;
+  uint8_t response_length = 0xFF;
+  if (nfc.inDataExchange(req.felica_through_payload, req.felica_through_payload[0], res.felica_through_payload, &response_length)) {
+    res_init(response_length);
   } else {
     res_init();
     res.status = STATUS_CARD_ERROR;
-    return;
   }
-  uint8_t code = req.encap_code;
-  res.encap_code = code + 1;
-  switch (code) {
-    case FelicaPolling:
-      {
-        res_init(0x14);
-        res.poll_systemCode[0] = SystemCode;
-        res.poll_systemCode[1] = SystemCode >> 8;
-      }
-      break;
-    case FelicaReqSysCode:
-      {
-        res_init(0x0D);
-        res.felica_payload[0] = 0x01;
-        res.felica_payload[1] = SystemCode;
-        res.felica_payload[2] = SystemCode >> 8;
-      }
-      break;
-    case FelicaActive2:
-      {
-        res_init(0x0B);
-        res.felica_payload[0] = 0x00;
-      }
-      break;
-    case FelicaReadWithoutEncryptData:
-      {
-        uint16_t serviceCodeList[1] = { (uint16_t)(req.serviceCodeList[1] << 8 | req.serviceCodeList[0]) };
-        for (uint8_t i = 0; i < req.numBlock; i++) {
-          uint16_t blockList[1] = { (uint16_t)(req.blockList[i][0] << 8 | req.blockList[i][1]) };
-          if (nfc.felica_ReadWithoutEncryption(1, serviceCodeList, 1, blockList, res.blockData[i]) != 1) {
-            memset(res.blockData[i], 0, 16);  // dummy data
-          }
-        }
-        res.RW_status[0] = 0;
-        res.RW_status[1] = 0;
-        res.numBlock = req.numBlock;
-        res_init(0x0D + req.numBlock * 16);
-      }
-      break;
-    case FelicaWriteWithoutEncryptData:
-      {
-        res_init(0x0C);  // WriteWithoutEncryption,ignore
-        res.RW_status[0] = 0;
-        res.RW_status[1] = 0;
-      }
-      break;
-    default:
-      res_init();
-      res.status = STATUS_INVALID_COMMAND;
-  }
-  res.encap_len = res.payload_len;
 }
